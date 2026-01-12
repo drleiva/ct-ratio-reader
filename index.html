@@ -3,14 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>T/C Ratio Reader (Private)</title>
+  <title>Strip Ratio Reader (Private)</title>
   <style>
-    :root { --card: #fff; --border: #d8d8d8; --shadow: 0 1px 3px rgba(0,0,0,.1); }
+    :root { --card:#fff; --border:#d8d8d8; --shadow:0 1px 3px rgba(0,0,0,.1); }
     body{
       font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
       margin:0; padding:14px;
-      background:#f7f7f7;
-      color:#111;
+      background:#f7f7f7; color:#111;
     }
     h2{ margin:0 0 10px 0; font-size:20px; }
     .row{ display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
@@ -20,21 +19,16 @@
       border-radius:10px;
       box-shadow:var(--shadow);
       padding:12px;
-      width: min(980px, 100%);
+      width:min(980px, 100%);
     }
     .small{ font-size:13px; color:#444; line-height:1.35; }
-    input[type="file"]{ font-size:14px; }
     button, select{
       padding:10px 12px; font-size:15px;
-      border-radius:10px;
-      border:1px solid var(--border);
-      background:#fff;
-      cursor:pointer;
+      border-radius:10px; border:1px solid var(--border);
+      background:#fff; cursor:pointer;
     }
-    button.primary{
-      background:#111; color:#fff; border-color:#111;
-    }
-    button:disabled{ opacity:.5; cursor:not-allowed; }
+    button.primary{ background:#111; color:#fff; border-color:#111; }
+    button:disabled, select:disabled{ opacity:.5; cursor:not-allowed; }
     canvas{
       width:100%;
       border:1px solid var(--border);
@@ -43,11 +37,7 @@
       background:#fff;
       display:block;
     }
-    .grid{
-      display:grid;
-      grid-template-columns: 1fr;
-      gap:12px;
-    }
+    .grid{ display:grid; grid-template-columns: 1fr; gap:12px; }
     .results{
       display:grid;
       grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
@@ -79,25 +69,39 @@
       border-radius:6px;
       background:#fafafa;
     }
+    label{ display:flex; align-items:center; gap:8px; }
   </style>
 </head>
 
 <body>
   <div class="card">
-    <h2>T/C Ratio Reader (Private)</h2>
+    <h2>Strip Ratio Reader (Private)</h2>
     <div class="row">
       <input type="file" accept="image/*" id="fileInput">
+
       <button class="primary" id="btnCompute" disabled>Compute</button>
       <button id="btnReset" disabled>Reset ROI</button>
       <button id="btnSwap" disabled>Swap T ↔ C</button>
-      <select id="modeSelect" title="Line finding mode" disabled>
-        <option value="auto" selected>Auto-detect 2 lines</option>
-        <option value="manual">Manual (use ROI only, no peak-find)</option>
-      </select>
+
+      <label class="small" title="Choose how the ratio is displayed">
+        Ratio:
+        <select id="ratioSelect" disabled>
+          <option value="TC" selected>T/C</option>
+          <option value="CT">C/T</option>
+        </select>
+      </label>
+
+      <label class="small" title="Line finding mode">
+        Mode:
+        <select id="modeSelect" disabled>
+          <option value="auto" selected>Auto-detect 2 lines</option>
+          <option value="manual">Manual (ROI only)</option>
+        </select>
+      </label>
     </div>
+
     <div class="small" style="margin-top:8px;">
-      Drag the red box over the test window. Use the <b>corner handle</b> to resize.
-      Then click <b>Compute</b>.
+      Drag the red box over the test window. Use the <b>corner handle</b> to resize. Then click <b>Compute</b>.
     </div>
   </div>
 
@@ -106,9 +110,9 @@
 
     <div class="results" id="results" style="display:none;">
       <div class="metric">
-        <b>T/C ratio (BG-normalized)</b>
+        <b id="mRatioLabel">Ratio</b>
         <span id="mRatio">—</span>
-        <div class="small">Computed as (BG−T)/(BG−C)</div>
+        <div class="small" id="mRatioFormula">—</div>
       </div>
       <div class="metric">
         <b>ΔT (BG − T)</b>
@@ -121,28 +125,20 @@
         <div class="small">Control contrast reference</div>
       </div>
       <div class="metric">
-        <b>RIOD-style (log contrast)</b>
+        <b id="mRIODLabel">RIOD-style</b>
         <span id="mRIOD">—</span>
-        <div class="small">log(BG/T) ÷ log(BG/C)</div>
+        <div class="small" id="mRIODFormula">—</div>
       </div>
     </div>
 
     <div class="hint" id="output">
       <b>Tips</b><br>
       • If the app mixes up which line is control vs test, click <span class="kbd">Swap T ↔ C</span>.<br>
-      • If auto-detection struggles, switch to <span class="kbd">Manual</span> and place ROI tightly around both lines.
+      • Keep ROI tight around both lines for best results.
     </div>
   </div>
 
 <script>
-/**
- * Private, simple strip reader:
- * - Grayscale conversion
- * - BG-normalized contrast (BG - line mean)
- * - Auto: find two line peaks from a vertical darkness profile
- * - Manual: assumes ROI already contains both lines; uses strongest two peaks within ROI
- */
-
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
@@ -151,6 +147,7 @@ const btnCompute = document.getElementById("btnCompute");
 const btnReset = document.getElementById("btnReset");
 const btnSwap = document.getElementById("btnSwap");
 const modeSelect = document.getElementById("modeSelect");
+const ratioSelect = document.getElementById("ratioSelect");
 
 const output = document.getElementById("output");
 const results = document.getElementById("results");
@@ -160,16 +157,43 @@ const mDT = document.getElementById("mDT");
 const mDC = document.getElementById("mDC");
 const mRIOD = document.getElementById("mRIOD");
 
+const mRatioLabel = document.getElementById("mRatioLabel");
+const mRatioFormula = document.getElementById("mRatioFormula");
+const mRIODLabel = document.getElementById("mRIODLabel");
+const mRIODFormula = document.getElementById("mRIODFormula");
+
 let img = new Image();
 let hasImage = false;
 
 // ROI with resize handle (bottom-right)
 let roi = { x: 50, y: 50, w: 240, h: 140 };
-let dragMode = null; // "move" | "resize" | null
+let dragMode = null; // "move" | "resize"
 let dragOffset = { x: 0, y: 0 };
-let lastComputed = null; // store {tY, cY} for swap
+
+// Store state from last compute so changing toggle updates instantly
+let lastComputed = null; // { cY,tY, gray,w,h,x1,x2,BG,C,T,dT,dC }
 
 function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
+
+function updateLabels(){
+  const mode = ratioSelect.value; // "TC" or "CT"
+  if (mode === "TC") {
+    mRatioLabel.textContent = "T/C ratio (BG-normalized)";
+    mRatioFormula.textContent = "Computed as (BG−T)/(BG−C)";
+    mRIODLabel.textContent = "RIOD-style (log contrast, T/C)";
+    mRIODFormula.textContent = "log(BG/T) ÷ log(BG/C)";
+  } else {
+    mRatioLabel.textContent = "C/T ratio (BG-normalized)";
+    mRatioFormula.textContent = "Computed as (BG−C)/(BG−T)";
+    mRIODLabel.textContent = "RIOD-style (log contrast, C/T)";
+    mRIODFormula.textContent = "log(BG/C) ÷ log(BG/T)";
+  }
+}
+
+ratioSelect.addEventListener("change", () => {
+  updateLabels();
+  if (lastComputed) renderMetricsFromLast();
+});
 
 fileInput.addEventListener("change", e => {
   const file = e.target.files[0];
@@ -177,7 +201,6 @@ fileInput.addEventListener("change", e => {
 
   img = new Image();
   img.onload = () => {
-    // Fit canvas to image (pixel-perfect). CSS makes it responsive.
     canvas.width = img.width;
     canvas.height = img.height;
     hasImage = true;
@@ -193,9 +216,12 @@ fileInput.addEventListener("change", e => {
     btnReset.disabled = false;
     btnSwap.disabled = true;
     modeSelect.disabled = false;
+    ratioSelect.disabled = false;
 
+    lastComputed = null;
     results.style.display = "none";
-    output.innerHTML = "<b>Loaded.</b> Position the ROI over the test window, then click <b>Compute</b>.";
+    updateLabels();
+    output.innerHTML = "<b>Loaded.</b> Position ROI over the test window, then click <b>Compute</b>.";
     draw();
   };
 
@@ -222,8 +248,8 @@ btnSwap.addEventListener("click", () => {
   const tmp = lastComputed.tY;
   lastComputed.tY = lastComputed.cY;
   lastComputed.cY = tmp;
-  // Recompute metrics quickly using stored peaks.
-  computeWithKnownLines(lastComputed.cY, lastComputed.tY);
+  // recompute C/T metrics from the same grayscale buffer
+  computeWithKnownLines(lastComputed.cY, lastComputed.tY, lastComputed.gray, lastComputed.w, lastComputed.h, lastComputed.x1, lastComputed.x2);
 });
 
 btnCompute.addEventListener("click", () => computeRatio());
@@ -236,13 +262,11 @@ function draw() {
   ctx.clearRect(0,0,canvas.width,canvas.height);
   ctx.drawImage(img,0,0);
 
-  // ROI box
   ctx.save();
   ctx.strokeStyle = "red";
   ctx.lineWidth = Math.max(2, Math.round(Math.min(canvas.width, canvas.height) / 300));
   ctx.strokeRect(roi.x, roi.y, roi.w, roi.h);
 
-  // Resize handle
   const hs = Math.max(10, Math.round(Math.min(canvas.width, canvas.height) / 60));
   ctx.fillStyle = "red";
   ctx.fillRect(roi.x + roi.w - hs, roi.y + roi.h - hs, hs, hs);
@@ -251,7 +275,6 @@ function draw() {
 
 function canvasToImageCoords(clientX, clientY){
   const r = canvas.getBoundingClientRect();
-  // Map CSS pixels -> canvas pixels
   const x = (clientX - r.left) * (canvas.width / r.width);
   const y = (clientY - r.top) * (canvas.height / r.height);
   return { x, y };
@@ -307,7 +330,6 @@ canvas.addEventListener("pointercancel", () => dragMode = null);
 function computeRatio() {
   if (!hasImage) return;
 
-  // Ensure integer ROI for getImageData
   const rx = Math.round(roi.x), ry = Math.round(roi.y);
   const rw = Math.round(roi.w), rh = Math.round(roi.h);
   if (rw < 10 || rh < 10) return;
@@ -318,30 +340,28 @@ function computeRatio() {
   const d = roiData.data;
 
   // Grayscale luminance
-  const gray = new Float32Array(w * h);
+  const gray = new Float32Array(w*h);
   for (let i=0; i<w*h; i++) {
     const r = d[i*4], g = d[i*4+1], b = d[i*4+2];
     gray[i] = 0.299*r + 0.587*g + 0.114*b;
   }
 
-  // Use central x-band to reduce edge noise
   const x1 = Math.floor(w * 0.18);
   const x2 = Math.floor(w * 0.82);
 
-  // Darkness profile by row: (255 - mean gray)
+  // Darkness profile by row
   const prof = new Float32Array(h);
   for (let y=0; y<h; y++){
-    let sum = 0, n = 0;
+    let sum=0, n=0;
     for (let x=x1; x<x2; x++){
-      sum += gray[y*w + x];
-      n++;
+      sum += gray[y*w + x]; n++;
     }
-    prof[y] = 255 - (sum / n);
+    prof[y] = 255 - (sum/n);
   }
 
-  // Smooth profile
+  // Smooth
   const sm = new Float32Array(h);
-  const k = 2; // +/- 2 rows window
+  const k = 2;
   for (let y=0; y<h; y++){
     let s=0, n=0;
     for (let yy=y-k; yy<=y+k; yy++){
@@ -350,7 +370,7 @@ function computeRatio() {
     sm[y] = s/n;
   }
 
-  // Peak find
+  // Peaks
   let peaks = [];
   for (let y=1; y<h-1; y++){
     if (sm[y] > sm[y-1] && sm[y] > sm[y+1]) peaks.push({ y, v: sm[y] });
@@ -359,11 +379,11 @@ function computeRatio() {
 
   if (peaks.length < 2) {
     results.style.display = "none";
-    output.innerHTML = "Could not detect two line peaks inside ROI. Try resizing ROI tighter, or switch to Manual.";
+    output.innerHTML = "Could not detect two line peaks inside ROI. Try resizing ROI tighter.";
     return;
   }
 
-  // Choose two peaks that are not too close
+  // pick two peaks with separation
   const minSep = Math.max(8, Math.round(h * 0.10));
   let p1 = peaks[0];
   let p2 = null;
@@ -376,21 +396,15 @@ function computeRatio() {
     return;
   }
 
-  // Convention: Control line is typically "upper" in ROI (smaller y)
+  // Convention: control is upper in ROI
   let cY = Math.min(p1.y, p2.y);
   let tY = Math.max(p1.y, p2.y);
 
-  // Store for swap button
-  lastComputed = { cY, tY, gray, w, h, x1, x2 };
   btnSwap.disabled = false;
-
-  computeWithKnownLines(cY, tY);
+  computeWithKnownLines(cY, tY, gray, w, h, x1, x2);
 }
 
-function computeWithKnownLines(cY, tY){
-  const { gray, w, h, x1, x2 } = lastComputed;
-
-  // Background estimate: top 15% + bottom 15%
+function computeWithKnownLines(cY, tY, gray, w, h, x1, x2){
   function meanBand(yStart, yEnd){
     let sum=0, n=0;
     for (let y=yStart; y<=yEnd; y++){
@@ -400,33 +414,43 @@ function computeWithKnownLines(cY, tY){
     }
     return sum / n;
   }
+
+  // BG estimate from top & bottom of ROI
   const topEnd = Math.max(0, Math.floor(h*0.15)-1);
   const botStart = Math.min(h-1, Math.floor(h*0.85));
   const BG = (meanBand(0, topEnd) + meanBand(botStart, h-1)) / 2;
 
-  // Line mean over a small vertical band around the line center
   function lineMean(yc){
     const half = Math.max(2, Math.round(h * 0.03)); // ~3% of ROI height
     const ys = clamp(yc - half, 0, h-1);
     const ye = clamp(yc + half, 0, h-1);
     return meanBand(ys, ye);
   }
+
   const C = lineMean(cY);
   const T = lineMean(tY);
 
-  // BG-normalized contrasts
   const dT = Math.max(0, BG - T);
   const dC = Math.max(0, BG - C);
 
-  // Avoid divide-by-zero
-  const ratio = (dC > 1e-6) ? (dT / dC) : 0;
+  lastComputed = { cY, tY, gray, w, h, x1, x2, BG, C, T, dT, dC };
 
-  // RIOD-style log contrast (simple + stable)
-  // Note: add epsilon to prevent log(0) issues
+  renderMetricsFromLast();
+}
+
+function renderMetricsFromLast(){
+  const { BG, C, T, dT, dC } = lastComputed;
   const eps = 1e-3;
-  const riod = (Math.log((BG + eps) / (T + eps))) / (Math.log((BG + eps) / (C + eps)));
 
-  // Show
+  let ratio, riod;
+  if (ratioSelect.value === "TC") {
+    ratio = (dC > 1e-6) ? (dT / dC) : 0;
+    riod  = (Math.log((BG+eps)/(T+eps))) / (Math.log((BG+eps)/(C+eps)));
+  } else {
+    ratio = (dT > 1e-6) ? (dC / dT) : 0;
+    riod  = (Math.log((BG+eps)/(C+eps))) / (Math.log((BG+eps)/(T+eps)));
+  }
+
   results.style.display = "grid";
   mRatio.textContent = ratio.toFixed(2);
   mDT.textContent = dT.toFixed(1);
@@ -435,8 +459,11 @@ function computeWithKnownLines(cY, tY){
 
   output.innerHTML =
     `<b>Done.</b> Computed from grayscale intensity inside ROI.<br>` +
-    `<span class="small">If T/C seems inverted, click <span class="kbd">Swap T ↔ C</span>.</span>`;
+    `<span class="small">If the ratio seems inverted, click <span class="kbd">Swap T ↔ C</span> or change the Ratio toggle.</span>`;
 }
+
+// init labels
+updateLabels();
 </script>
 </body>
 </html>
